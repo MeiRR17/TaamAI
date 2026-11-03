@@ -1,3 +1,7 @@
+> **Script consolidation (2026-11-03):** Selected utility scripts from this repository were integrated into [Learning_Modules/tools/taam-cantillation](https://github.com/MeiRR17/Learning_Modules/tree/main/tools/taam-cantillation), via [PR #4](https://github.com/MeiRR17/Learning_Modules/pull/4). The import includes source provenance and CI syntax/content checks. The original repository remains accessible, may contain additional data or configuration, and has **not been archived or deleted**. Consult the consolidated README for exclusions and portability changes.
+
+---
+
 # Torah Cantillation Dataset Pipeline
 
 A Python pipeline to automatically align Whisper transcriptions with Sefaria's punctuated Torah text, extract cantillation marks (Ta'amei HaMikra), slice audio segments, and organize them into a dataset structure for deep learning classification.
