@@ -6,6 +6,7 @@ extracts cantillation marks, slices audio, and organizes dataset.
 
 import requests
 import json
+import hashlib
 import os
 import logging
 import re
@@ -156,43 +157,33 @@ def strip_niqqud_and_cantillation(text):
     return text
 
 
-def align_words(whisper_word, sefaria_text):
+def normalize_alignment_word(value):
+    """Compare Hebrew letters only, ignoring vowels, tropes and punctuation."""
+    if not isinstance(value, str):
+        return ""
+    plain = strip_niqqud_and_cantillation(value).lower()
+    return regex.sub(r"[^\u05d0-\u05ea]", "", plain)
+
+
+def align_words(whisper_word, sefaria_words, cursor, lookahead=20):
+    """Match only forward from the previous aligned word.
+
+    Repeated words can carry different cantillation marks. Searching the
+    entire reference for each Whisper word would mislabel all later repeats.
+    A bounded lookahead permits minor omissions while avoiding unrelated
+    matches far ahead in the source text. A failed match does not move the
+    cursor, so intervening noise does not shift all remaining assignments.
     """
-    Align a Whisper word to the corresponding word in Sefaria text.
-    
-    Args:
-        whisper_word: Word from Whisper transcription
-        sefaria_text: Full text from Sefaria with cantillation marks
-    
-    Returns:
-        Matched Sefaria word with full cantillation marks, or None if no match
-    """
-    # Clean both words for comparison
-    whisper_clean = strip_niqqud_and_cantillation(whisper_word.lower())
-    
-    # Split Sefaria text into words
-    sefaria_words = sefaria_text.split()
-    
-    # Try to find matching word
-    for sefaria_word in sefaria_words:
-        sefaria_clean = strip_niqqud_and_cantillation(sefaria_word.lower())
-        
-        # Compare cleaned versions
-        if whisper_clean == sefaria_clean:
-            return sefaria_word
-    
-    # If no exact match, try fuzzy matching (remove spaces, etc.)
-    whisper_fuzzy = whisper_clean.replace(' ', '').replace('-', '')
-    
-    for sefaria_word in sefaria_words:
-        sefaria_clean = strip_niqqud_and_cantillation(sefaria_word.lower())
-        sefaria_fuzzy = sefaria_clean.replace(' ', '').replace('-', '')
-        
-        if whisper_fuzzy == sefaria_fuzzy:
-            return sefaria_word
-    
-    logger.warning(f"Could not align word: '{whisper_word}'")
-    return None
+    target = normalize_alignment_word(whisper_word)
+    if not target:
+        return None, cursor
+    stop = min(len(sefaria_words), cursor + lookahead)
+    for index in range(cursor, stop):
+        if normalize_alignment_word(sefaria_words[index]) == target:
+            return sefaria_words[index], index + 1
+    logger.warning("Could not align word near reference index %s: %r",
+                   cursor, whisper_word)
+    return None, cursor
 
 
 def slice_audio(audio_path, start_ms, end_ms, output_path):
@@ -254,23 +245,36 @@ def process_whisper_json(whisper_json_path, audio_path, sefaria_text, root_dir):
         logger.error(f"Failed to load Whisper JSON {whisper_json_path}: {e}")
         return stats
     
-    # Extract base filename for output naming
-    base_filename = Path(audio_path).stem
-    
+    # Identify source and maintain a global word index across all Whisper
+    # segments. Segment-local enumerate() silently overwrote earlier WAV files.
+    base_filename = re.sub(r"[^A-Za-z0-9_-]", "_", Path(audio_path).stem)[:48] or "audio"
+    source_identity = "\\n".join((
+        str(Path(audio_path).resolve()),
+        str(Path(whisper_json_path).resolve()),
+        sefaria_text,
+    ))
+    source_id = hashlib.sha256(source_identity.encode("utf-8")).hexdigest()[:12]
+    reference_words = sefaria_text.split()
+    reference_cursor = 0
+    global_word_index = 0
+
     # Process each word segment
     if 'segments' in whisper_data:
         for segment in whisper_data['segments']:
             if 'words' in segment:
-                for word_idx, word_data in enumerate(segment['words']):
+                for word_data in segment['words']:
                     stats['total_words'] += 1
+                    global_word_index += 1
                     
                     whisper_word = word_data.get('word', '').strip()
                     start_time = word_data.get('start', 0)
                     end_time = word_data.get('end', 0)
                     
                     # Align with Sefaria text
-                    sefaria_word = align_words(whisper_word, sefaria_text)
-                    
+                    sefaria_word, reference_cursor = align_words(
+                        whisper_word, reference_words, reference_cursor
+                    )
+
                     if sefaria_word:
                         stats['aligned_words'] += 1
                         
@@ -289,7 +293,7 @@ def process_whisper_json(whisper_json_path, audio_path, sefaria_text, root_dir):
                                 root_dir,
                                 'dataset',
                                 cantillation,
-                                f"{base_filename}_{word_idx:03d}.wav"
+                                f"{base_filename}_{source_id}_{global_word_index:06d}.wav"
                             )
                             
                             # Slice and save audio
