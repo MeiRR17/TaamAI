@@ -222,7 +222,7 @@ def slice_audio(audio, start_ms, end_ms, output_path):
         temporary = None
         logger.debug("Saved audio segment: %s", output)
         return True
-    except (OSError, ValueError, Exception) as exc:
+    except Exception as exc:
         logger.error("Failed to save audio slice %s: %s", output, exc)
         return False
     finally:
@@ -290,6 +290,11 @@ def process_whisper_json(whisper_json_path, audio_path, sefaria_text, root_dir):
     # Process each word segment
     if 'segments' in whisper_data:
         for segment in whisper_data['segments']:
+            if not isinstance(segment, dict) or not isinstance(
+                segment.get('words'), list
+            ):
+                logger.warning("Ignoring malformed Whisper segment")
+                continue
             if 'words' in segment:
                 for word_data in segment['words']:
                     stats['total_words'] += 1
